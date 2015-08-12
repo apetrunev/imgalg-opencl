@@ -16,8 +16,8 @@ __kernel void cl_img_gaussian_blur(__global const uchar *gray, __global uchar *o
 	int i, j, offset;
 	uint x, y, summ;
 
-	x = get_global_id(0);
-	y = get_global_id(1);
+	y = get_global_id(0);
+	x = get_global_id(1);
 
 	offset = n/2;
 
@@ -32,7 +32,7 @@ __kernel void cl_img_gaussian_blur(__global const uchar *gray, __global uchar *o
 
 	for (j = -offset; j <= offset; j++) {
 		for (i = -offset; i <= offset; i++) {
-			summ = summ + gray[(y + j)*w + x + i]*gbox[(j + offset)*n + i + offset];
+			summ += gray[(y + j)*w + x + i]*gbox[(j + offset)*n + i + offset];
 		}
 	}
 
