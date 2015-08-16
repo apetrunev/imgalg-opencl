@@ -259,7 +259,6 @@ void xcl_img_grayscale(struct img_ctx *rgb, struct img_ctx *gray)
 	clReleaseKernel(cl_img_grayscale);
 }
 
-
 void xcl_img_gaussian_blur(struct img_ctx *gray, struct img_ctx *blur)
 {
 	cl_mem gray_buf, blur_buf, gauss_buf;
