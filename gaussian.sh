@@ -66,7 +66,6 @@ printf('gauss_sum %d\n', sum(normalized(:)));
 printf('gauss_dim %d\n', N);
 
 " | gawk '
-
 match($0, /^gauss[[:digit:]]+[[:space:]]+[[](.*)+[]]$/, arr) {
 	split(arr[1], rows, ";")
 }
@@ -82,7 +81,6 @@ match($0, /gauss_dim[[:space:]]+([[:digit:]]+)$/, arr) {
 END {
 	printf("#ifndef GAUSS_H_\n")
 	printf("#define GAUSS_H_\n")
-
 	printf("\nint gauss[] = {\n")
 	
 	for (i = 1; i <= length(rows); i++) {
@@ -92,11 +90,8 @@ END {
 	}
 
 	printf("};\n\n")
-
-
 	printf("int gauss_sum = %d;\n", sum)
 	printf("int gauss_dim = %d;\n", dim)
-
 	printf("\n#endif /* GAUSS_H_ */\n")
 }
 ' 
