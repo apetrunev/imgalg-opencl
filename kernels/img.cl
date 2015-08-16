@@ -11,7 +11,7 @@ __kernel void cl_img_grayscale(__global const uchar *r, __global const uchar *g,
 	gray[i] = (uint)(0.229*r[i] + 0.587*g[i] + 0.114*b[i]);	
 }
 
-__kernel void cl_img_gaussian_blur(__global const uchar *gray, __global uchar *out, __global const uchar *gbox, uint n, uint sum, uint w, uint h)
+__kernel void cl_img_gaussian_blur(__global const uchar *gray, __global uchar *out, __global const uint *gbox, uint n, uint sum, uint w, uint h)
 {
 	int i, j, offset;
 	uint x, y, summ;
