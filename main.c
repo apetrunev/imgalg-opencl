@@ -19,6 +19,12 @@
 #include "xmalloc.h"
 #include "cl_blur.h"
 
+static cl_platform_id platform;
+static cl_device_id device;
+static cl_context context;
+static cl_command_queue queue;
+static cl_program program;
+
 int get_ctx(GdkPixbuf *pbuf, img_type_t type, struct img_ctx **imctx)
 {
 	struct img_ctx *ctx;
@@ -189,24 +195,147 @@ cl_kernel create_kernel(cl_program  program, const char *kernel_name)
 	return kernel;
 }
 
+void xcl_img_grayscale(struct img_ctx *rgb, struct img_ctx *gray)
+{
+	cl_kernel cl_img_grayscale;
+	cl_mem r, g, b, out;
+	cl_int err;
+	size_t global_work_size;
+	size_t local_work_size;
+	int len;
+
+	assert(rgb != NULL);
+	assert(gray != NULL);
+
+	len = rgb->w*rgb->h;
+	err = 0;
+
+	cl_img_grayscale = create_kernel(program, "cl_img_grayscale");
+
+	r = create_buffer(context, CL_MEM_READ_WRITE, len, NULL);
+	g = create_buffer(context, CL_MEM_READ_WRITE, len, NULL);
+	b = create_buffer(context, CL_MEM_READ_WRITE, len, NULL);
+	out = create_buffer(context, CL_MEM_WRITE_ONLY, len, NULL);
+
+	err |= clSetKernelArg(cl_img_grayscale, 0, sizeof(cl_mem), &r);
+	err |= clSetKernelArg(cl_img_grayscale, 1, sizeof(cl_mem), &g);
+	err |= clSetKernelArg(cl_img_grayscale, 2, sizeof(cl_mem), &b);
+	err |= clSetKernelArg(cl_img_grayscale, 3, sizeof(cl_mem), &out);
+	err |= clSetKernelArg(cl_img_grayscale, 4, sizeof(cl_int), (void *)&len);
+
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clSetKernelArg() %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+
+	err |= clEnqueueWriteBuffer(queue, r, CL_FALSE, 0, len, rgb->r, 0, NULL, NULL);
+	err |= clEnqueueWriteBuffer(queue, g, CL_FALSE, 0, len, rgb->g, 0, NULL, NULL);
+	err |= clEnqueueWriteBuffer(queue, b, CL_FALSE, 0, len, rgb->b, 0, NULL, NULL);
+
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clEnqueueWriteBuffer() %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}	
+
+	global_work_size = len;
+	local_work_size = 64;
+
+	err = clEnqueueNDRangeKernel(queue, cl_img_grayscale, 1, NULL, &global_work_size, &local_work_size, 0, NULL, NULL);
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clEnqueueNDRangeKernel() %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+	
+	err = clEnqueueReadBuffer(queue, out, CL_TRUE, 0, len, gray->pix, 0, NULL, NULL);
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clEnqueueReadBuffer() %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+	
+	clReleaseMemObject(r);
+   	clReleaseMemObject(g);
+   	clReleaseMemObject(b);
+	clReleaseMemObject(out);
+	clReleaseKernel(cl_img_grayscale);
+}
+
+
+void xcl_img_gaussian_blur(struct img_ctx *gray, struct img_ctx *blur)
+{
+	cl_mem gray_buf, blur_buf, gauss_buf;
+	cl_kernel cl_img_gaussian_blur;
+	cl_int err;
+	size_t global_wblur[2];
+	size_t local_wblur[2];
+	int len;
+
+	assert(gray != NULL);
+	assert(blur != NULL);
+
+	len = gray->w*gray->h;
+	err = 0;
+
+	cl_img_gaussian_blur = create_kernel(program, "cl_img_gaussian_blur");
+
+	gray_buf = create_buffer(context,  CL_MEM_READ_ONLY, len, NULL);
+	gauss_buf = create_buffer(context, CL_MEM_READ_ONLY, gauss_dim*gauss_dim*sizeof(cl_int), NULL);
+	/* output buffer */
+	blur_buf = create_buffer(context, CL_MEM_WRITE_ONLY, len, NULL);
+
+	err |= clSetKernelArg(cl_img_gaussian_blur, 0, sizeof(cl_mem), &gray_buf);
+	err |= clSetKernelArg(cl_img_gaussian_blur, 1, sizeof(cl_mem), &blur_buf);
+	err |= clSetKernelArg(cl_img_gaussian_blur, 2, sizeof(cl_mem), &gauss_buf);
+	err |= clSetKernelArg(cl_img_gaussian_blur, 3, sizeof(cl_int), &gauss_dim);
+	err |= clSetKernelArg(cl_img_gaussian_blur, 4, sizeof(cl_int), &gauss_sum);
+	err |= clSetKernelArg(cl_img_gaussian_blur, 5, sizeof(cl_int), &gray->w);
+	err |= clSetKernelArg(cl_img_gaussian_blur, 6, sizeof(cl_int), &gray->h);
+	
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clSetKernelArg() %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+
+	err |= clEnqueueWriteBuffer(queue, gray_buf, CL_FALSE, 0, len, gray->pix, 0, NULL, NULL);
+	err |= clEnqueueWriteBuffer(queue, gauss_buf, CL_FALSE, 0, gauss_dim*gauss_dim*sizeof(cl_int), gauss, 0, NULL, NULL);
+
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clEnqueueWriteBuffer() %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}	
+
+	global_wblur[0] = gray->h;
+	global_wblur[1] = gray->w;
+	local_wblur[0] = local_wblur[1] = 32;
+
+	err = clEnqueueNDRangeKernel(queue, cl_img_gaussian_blur, 2, NULL, global_wblur, local_wblur, 0, NULL, NULL);
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clEnqueueNDRangeKernel() blur %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+
+	err = clEnqueueReadBuffer(queue, blur_buf, CL_TRUE, 0, len, blur->pix, 0, NULL, NULL);
+	if (err != CL_SUCCESS) {
+		fprintf(stderr, "error: clEnqueueReadBuffer() blur %d %s\n", err, cl_strerror(err));
+		exit(EXIT_FAILURE);
+	}
+
+	clReleaseMemObject(gray_buf);
+	clReleaseMemObject(blur_buf);
+	clReleaseMemObject(gauss_buf);
+	clReleaseKernel(cl_img_gaussian_blur);
+}
+
 int main(int argc, char **argv)
 {
 	GdkPixbuf *pbuf, *newbuf;
 	GError *error = NULL;
-	struct img_ctx *rgb, *gray, *blur;
-	char *fname, *imgname, *outname, *ext, *src, *log;
-	int w, h, len, opt;
+	struct img_ctx *rgb, *gray;
+	char *fname, *imgname, *outname, *ext, *src;
+	int w, h, opt;
 	struct stat sb;
 	FILE *file;
-	size_t fsize, log_size;
-	cl_platform_id platform;
-	cl_device_id device;
-	cl_context context;
-	cl_command_queue queue;
-	cl_kernel cl_img_grayscale, cl_img_gaussian_blur;
-	cl_program program;
-	cl_int i, err;
-	cl_mem r, g, b, out;
+	size_t fsize;
+	cl_int err;
 
 	fname = NULL;
 	outname = NULL;
@@ -286,10 +415,8 @@ int main(int argc, char **argv)
 
 	w = rgb->w;
 	h = rgb->h;
-	len = w*h;
 
 	gray = img_ctx_new(w, h, TYPE_GRAY, C_NONE);
-	blur = img_ctx_new(w, h, TYPE_GRAY, C_NONE);
 
 	/* 
 	 * OPENCL INITIALIZATION
@@ -321,114 +448,19 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	build_program(program, 1, &device, NULL, NULL, NULL);
-	
-	/* initialize functions 
-	 */
-	cl_img_grayscale = create_kernel(program, "cl_img_grayscale");
-	cl_img_gaussian_blur = create_kernel(program, "cl_img_gaussian_blur");
-
-	/* init buffer for input and output images
-	 */
-	r = create_buffer(context, CL_MEM_READ_WRITE, w*h, NULL);
-	g = create_buffer(context, CL_MEM_READ_WRITE, w*h, NULL);
-	b = create_buffer(context, CL_MEM_READ_WRITE, w*h, NULL);
-	out = create_buffer(context, CL_MEM_WRITE_ONLY, w*h, NULL);
-
-	/* setting kernel arguments 
-	 */
-	err |= clSetKernelArg(cl_img_grayscale, 0, sizeof(cl_mem), &r);
-	err |= clSetKernelArg(cl_img_grayscale, 1, sizeof(cl_mem), &g);
-	err |= clSetKernelArg(cl_img_grayscale, 2, sizeof(cl_mem), &b);
-	err |= clSetKernelArg(cl_img_grayscale, 3, sizeof(cl_mem), &out);
-	err |= clSetKernelArg(cl_img_grayscale, 4, sizeof(cl_int), (void *)&len);
-
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clSetKernelArg() %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
 	/* create comand queue */	
 	queue = clCreateCommandQueue(context, device, 0, &err);
 	if (err != CL_SUCCESS) {
 		fprintf(stderr, "error: clCreateCommandQueue() %d %s\n", err, cl_strerror(err));
 		exit(EXIT_FAILURE);
 	}
-
-	err |= clEnqueueWriteBuffer(queue, r, CL_FALSE, 0, w*h, rgb->r, 0, NULL, NULL);
-	err |= clEnqueueWriteBuffer(queue, g, CL_FALSE, 0, w*h, rgb->g, 0, NULL, NULL);
-	err |= clEnqueueWriteBuffer(queue, b, CL_FALSE, 0, w*h, rgb->b, 0, NULL, NULL);
-
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clEnqueueWriteBuffer() %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}	
-
-	size_t global_work_size = w*h;
-	size_t local_work_size = 64;
-
-	err = clEnqueueNDRangeKernel(queue, cl_img_grayscale, 1, NULL, &global_work_size, &local_work_size, 0, NULL, NULL);
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clEnqueueNDRangeKernel() %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}
 	
-	err = clEnqueueReadBuffer(queue, out, CL_TRUE, 0, w*h, gray->pix, 0, NULL, NULL);
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clEnqueueReadBuffer() %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
-	cl_mem gray_buf, blur_buf, gauss_buf;
-	cl_int gsize = 5;
-	cl_int gsumm = 331;
-
-	gray_buf = create_buffer(context,  CL_MEM_READ_ONLY, w*h, NULL);
-	gauss_buf = create_buffer(context, CL_MEM_READ_ONLY, 5*5, NULL);
-	blur_buf = create_buffer(context, CL_MEM_WRITE_ONLY, w*h, NULL);
-
-
-	err |= clSetKernelArg(cl_img_gaussian_blur, 0, sizeof(cl_mem), &gray_buf);
-	err |= clSetKernelArg(cl_img_gaussian_blur, 1, sizeof(cl_mem), &blur_buf);
-	err |= clSetKernelArg(cl_img_gaussian_blur, 2, sizeof(cl_mem), &gauss_buf);
-	err |= clSetKernelArg(cl_img_gaussian_blur, 3, sizeof(cl_int), &gsize);
-	err |= clSetKernelArg(cl_img_gaussian_blur, 4, sizeof(cl_int), &gsumm);
-	err |= clSetKernelArg(cl_img_gaussian_blur, 5, sizeof(cl_int), &w);
-	err |= clSetKernelArg(cl_img_gaussian_blur, 6, sizeof(cl_int), &h);
+	build_program(program, 1, &device, NULL, NULL, NULL);
 	
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clSetKernelArg() %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
-	err |= clEnqueueWriteBuffer(queue, gray_buf, CL_FALSE, 0, w*h, gray->pix, 0, NULL, NULL);
-	err |= clEnqueueWriteBuffer(queue, gauss_buf, CL_FALSE, 0, 5*5, gauss5, 0, NULL, NULL);
-
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clEnqueueWriteBuffer() %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}	
-
-	size_t global_wblur[2];
-	size_t local_wblur[2];
-
-	global_wblur[0] = w;
-	global_wblur[1] = h;
-
-	local_wblur[0] = local_wblur[1] = 32;
-
-	err = clEnqueueNDRangeKernel(queue, cl_img_gaussian_blur, 2, NULL, global_wblur, local_wblur, 0, NULL, NULL);
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clEnqueueNDRangeKernel() blur %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
-	err = clEnqueueReadBuffer(queue, blur_buf, CL_TRUE, 0, w*h, gray->pix, 0, NULL, NULL);
-	if (err != CL_SUCCESS) {
-		fprintf(stderr, "error: clEnqueueReadBuffer() blur %d %s\n", err, cl_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-
+	/* run kernels */
+	xcl_img_grayscale(rgb, gray);
+	xcl_img_gaussian_blur(gray, gray);
+	
 	/* END OF OPENCL SECTION
 	 */
 	newbuf = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, w, h);
@@ -444,17 +476,13 @@ int main(int argc, char **argv)
 		g_error_free(error);
 		exit(EXIT_FAILURE);
 	}
-
+	
 	img_destroy_ctx(rgb);
 	img_destroy_ctx(gray);
 
 	g_object_unref(G_OBJECT(pbuf));
 	g_object_unref(G_OBJECT(newbuf));
 
-	clReleaseMemObject(r);
-   	clReleaseMemObject(g);
-   	clReleaseMemObject(b);
-   	clReleaseKernel(cl_img_grayscale);
    	clReleaseCommandQueue(queue);
    	clReleaseProgram(program);
    	clReleaseContext(context);
