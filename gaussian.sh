@@ -59,15 +59,44 @@ endfor
 # find normalization coefficient
 c = 1.0 / kernel(N,N);
 
-normalized = round(c*kernel)
+normalized = round(c*kernel);
 
-summ = 0;
+printf('gauss%d %s\n', N, mat2str(normalized, 3)); 
+printf('gauss_sum %d\n', sum(normalized(:)));
+printf('gauss_dim %d\n', N);
 
-for i = 1:N
-	for j = 1:N
-		summ = summ + normalized(i,j);
-	endfor
-endfor
+" | gawk '
 
-summ
-"
+match($0, /^gauss[[:digit:]]+[[:space:]]+[[](.*)+[]]$/, arr) {
+	split(arr[1], rows, ";")
+}
+
+match($0, /^gauss_sum[[:space:]]+([[:digit:]]+)$/, arr) {
+	sum = arr[1]
+}
+
+match($0, /gauss_dim[[:space:]]+([[:digit:]]+)$/, arr) {
+	dim = arr[1]
+}
+
+END {
+	printf("#ifndef GAUSS_H_\n")
+	printf("#define GAUSS_H_\n")
+
+	printf("\nint gauss[] = {\n")
+	
+	for (i = 1; i <= length(rows); i++) {
+		gsub(/[[:space:]]/, ",", rows[i])
+		comma = i == length(rows) ? "": ","
+		printf("\t%s%s\n", rows[i], comma)
+	}
+
+	printf("};\n\n")
+
+
+	printf("int gauss_sum = %d;\n", sum)
+	printf("int gauss_dim = %d;\n", dim)
+
+	printf("\n#endif /* GAUSS_H_ */\n")
+}
+' 

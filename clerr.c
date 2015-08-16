@@ -1,5 +1,7 @@
 #include <stdlib.h>
 
+#include <CL/cl.h>
+
 #include "clerr.h"
 #include "xmalloc.h"
 
@@ -74,7 +76,7 @@ struct error_codes errtable[] = {
 	{ CL_TABLE_END, NULL }
 };
 
-char *cl_strerror(cl_int code)
+char *cl_strerror(int code)
 {
 	int i;
 
